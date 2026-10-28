@@ -1,0 +1,54 @@
+services:
+  # Base de datos de support-ticket-service
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: helpflow
+      POSTGRES_USER: helpflow
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-helpflow}
+    # 5435 en tu PC -> 5432 dentro del contenedor (así no choca con el PostgreSQL local)
+    ports: ["5435:5432"]
+    volumes: [db-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helpflow -d helpflow"]
+      interval: 5s
+      retries: 10
+
+  # Microservicio simulado de disponibilidad técnica
+  technician-dispatch-service:
+    build: ./technician-dispatch
+    ports: ["8081:8081"]
+    environment:
+      # Hora de Colombia (sin esto la JVM del contenedor usa UTC)
+      TZ: America/Bogota
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health || exit 1"]
+      interval: 10s
+      start_period: 30s
+      retries: 10
+
+  # Servicio principal de tickets
+  support-ticket-service:
+    build: ./support-ticket
+    ports: ["8080:8080"]
+    environment:
+      # Hora de Colombia: createdAt y slaDeadline se guardan en hora local (TIMESTAMP sin zona).
+      # Debe coincidir con la del PC para poder mezclar la app de IntelliJ y la de Docker sobre la misma base.
+      TZ: America/Bogota
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/helpflow
+      SPRING_DATASOURCE_USERNAME: helpflow
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-helpflow}
+      # Dentro de la red de compose se usa el nombre del servicio, nunca localhost
+      DISPATCH_BASE_URL: http://technician-dispatch-service:8081
+      JWT_SECRET: ${JWT_SECRET:?Falta JWT_SECRET en el archivo .env}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      start_period: 40s
+      retries: 10
+    depends_on:
+      db: { condition: service_healthy }
+      technician-dispatch-service: { condition: service_healthy }
+
+volumes:
+  db-data:
